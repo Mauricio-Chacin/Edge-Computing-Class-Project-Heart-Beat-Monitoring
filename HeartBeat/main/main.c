@@ -1,28 +1,35 @@
-
 #include <stdio.h>
-#include <stdlib.h>
-#include <inttypes.h>
+#include "driver/i2c_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
+#include "esp_err.h"
+#include "drivers.h"
+#include "Functions.h"
 
-TaskHandle_t TestTask = NULL;
-TaskHandle_t TestTask2 = NULL;
+int count = 0;
+int idx = 0;
+float Sum = 0;
+float TempWindow[Window];
+float HeartRateWindow[Window];
+float OxygenWindow[Window];
 
-void PrintTask(void *parameter){
-    while(1){
-    printf("Task 1\n");
-    vTaskDelay(2000/ portTICK_PERIOD_MS);}
+
+static void sensor_task(void *arg)
+{
+    uint32_t red = 0, ir = 0;
+    while (1) {
+        while (Heart_read_sample(&red, &ir)) { }   // drain FIFO, keep latest
+        float temp = Temp_read();
+        float filter = moving_average(temp,&count,&Sum,&idx,HeartRateWindow);
+        printf("Temp: %.2f C | RED: %lu | IR: %lu\t filter: %.2f\n",
+               temp, (unsigned long)red, (unsigned long)ir,filter);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
 }
 
-void PrintTask2(void *parameter){
-    while(1){
-    printf("Task 2\n");
-    vTaskDelay(2000/ portTICK_PERIOD_MS);}
-}
 void app_main(void)
 {
-    xTaskCreate(PrintTask, "Task Test", 2048, NULL, 1, &TestTask);
-    xTaskCreate(PrintTask2, "Task Test", 2048, NULL, 1, &TestTask2);
-    printf("Hello");
+    i2c_init();
+    Heart_init();
+    xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 5, NULL);
 }
