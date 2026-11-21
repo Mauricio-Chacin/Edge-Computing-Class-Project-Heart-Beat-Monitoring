@@ -1,6 +1,16 @@
 #include "driver/i2c_master.h"
 #include "Drivers.h"
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+//Handle Variables for I2C
+i2c_master_bus_handle_t busSensor;
+i2c_master_bus_handle_t busOled;
+i2c_master_dev_handle_t Temp_dev;
+i2c_master_dev_handle_t Heart_dev;
+i2c_master_dev_handle_t Oled_dev;
+//Oled Screen bitmaps
 
 void i2c_init()
 {
