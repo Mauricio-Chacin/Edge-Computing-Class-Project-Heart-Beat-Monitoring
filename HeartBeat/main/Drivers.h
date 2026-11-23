@@ -1,5 +1,9 @@
 #ifndef Drivers_H
 #define Drivers_H
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include "esp_err.h"
 #include <driver/i2c_master.h>
 #include <driver/gpio.h>
 //MACROS FOR I2C COMMUNICATION Bus 1
@@ -20,6 +24,19 @@
 #define K 10
 #define ALPHA 0.5
 
+//BLE UUIDS
+// Service: 4fafc201-1fb5-459e-8fcc-c5c9c331914b
+#define SERVICE_UUID \
+    0x4B, 0x91, 0x31, 0xC3, 0xC9, 0xC5, 0xCC, 0x8F, \
+    0x9E, 0x45, 0xB5, 0x1F, 0x01, 0xC2, 0xAF, 0x4F
+
+// Characteristic: beb5483e-36e1-4688-b7f5-ea07361b26a8
+#define CHAR_UUID \
+    0xA8, 0x26, 0x1B, 0x36, 0x07, 0xEA, 0xF5, 0xB7, \
+    0x88, 0x46, 0xE1, 0x36, 0x3E, 0x48, 0xB5, 0xBE
+
+#define BLE_PAYLOAD_MAX 16
+#define BLE_DEVICE_NAME "HeartBeatMonitor"
 
 //Handle Variables for I2C
 i2c_master_bus_handle_t busSensor;
@@ -45,4 +62,7 @@ float EMAFilter(float sample);
 //Oled
 void OLED_WriteBuffer(i2c_master_dev_handle_t dev, const uint8_t *bitmap);
 void horizontal_to_pages(uint8_t *src, uint8_t *dst);
+//BLE Functions
+void ble_start(void);
+int ble_send_value(const void *data, uint16_t len);
 #endif
