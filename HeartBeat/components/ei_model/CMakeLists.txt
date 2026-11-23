@@ -1,14 +1,35 @@
-cmake_minimum_required(VERSION 3.13.1)
+# Builds the Edge Impulse anomaly model for ESP-IDF (replaces the Zephyr CMakeLists from the export).
+# Only the parts of the SDK this model needs are compiled.
 
-if(NOT TARGET app)
-     message(FATAL_ERROR "Please create a target named 'app' (ex: add_executable(app)) before adding this file")
-endif()
+set(EI_SDK_DIR ${CMAKE_CURRENT_LIST_DIR}/edge-impulse-sdk)
+file(GLOB EI_KISSFFT_SRCS ${EI_SDK_DIR}/dsp/kissfft/*.cpp)
 
-include(edge-impulse-sdk/cmake/utils.cmake)
-add_subdirectory(edge-impulse-sdk/cmake/zephyr)
+idf_component_register(
+    SRCS
+        "ei_anomaly.cpp"
+        "tflite-model/model.cpp"
+        "edge-impulse-sdk/porting/espressif/ei_classifier_porting.cpp"
+        "edge-impulse-sdk/dsp/memory.cpp"
+        ${EI_KISSFFT_SRCS}
+    INCLUDE_DIRS
+        "."
+        "edge-impulse-sdk"
+        "edge-impulse-sdk/third_party"
+        "model-parameters"
+        "tflite-model"
+    REQUIRES esp_timer
+)
 
-RECURSIVE_FIND_FILE_APPEND(MODEL_SOURCE "tflite-model" "*.cpp")
-target_include_directories(app PRIVATE .)
-
-# add all sources to the project
-target_sources(app PRIVATE ${MODEL_SOURCE})
+# The ESP-NN / ESP-DSP speed-ups are for neural networks, not needed for K-means
+target_compile_definitions(${COMPONENT_LIB} PUBLIC
+    EI_CLASSIFIER_TFLITE_ENABLE_ESP_NN=0
+    EIDSP_USE_ESP_DSP=0
+    EIDSP_USE_CMSIS_DSP=0
+)
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    -std=gnu++17
+    -Wno-unused-variable
+    -Wno-error=format=
+    -Wno-format-security
+    -Wno-deprecated-declarations
+)
