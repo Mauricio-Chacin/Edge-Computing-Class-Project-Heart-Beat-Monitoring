@@ -57,6 +57,7 @@ int CountHeart = 0;
 int IdxHeart = 0;
 uint32_t Sum = 0;
 
+// This function will be defunct since I updated the code to add the new filtering.
 uint32_t MovingAverage(uint32_t sample){
     if(CountHeart == K){
         Sum -= HeartRateWindow[IdxHeart];  
