@@ -84,7 +84,7 @@ static void sensor_task(void *arg)
         float SmoothTemp = EMAFilter(temp);
         printf("Temp: %.2f C | RED: %lu | IR: %lu | RedS: %lu | TempS: %.2f\n",
                temp, (unsigned long)red, (unsigned long)ir,(unsigned long)SmoothRed,SmoothTemp);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
