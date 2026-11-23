@@ -20,6 +20,13 @@
 #define K 10
 #define ALPHA 0.5
 
+//Sampling and anomaly detection
+#define SAMPLE_PERIOD_MS    100     // one sample every 100 ms (10 Hz)
+#define ANOMALY_THRESHOLD   1.2f    // score above this = abnormal
+#define ALERT_NEEDED        3       // alert if 3 of the last 5 windows were abnormal
+#define ALERT_WINDOW        5
+#define ANOMALY_MAX_ROWS    60      // size of the window buffer (the model uses 10 rows)
+
 
 //Handle Variables for I2C
 i2c_master_bus_handle_t busSensor;

@@ -78,9 +78,9 @@ void Heart_init()
     write_reg(Heart_dev, 0x05, 0x00);          // clear overflow counter
     write_reg(Heart_dev, 0x06, 0x00);          // clear FIFO read pointer
 
-    write_reg(Heart_dev, 0x08, 0x1F);          // FIFO: no averaging, rollover on
+    write_reg(Heart_dev, 0x08, 0x50);          // FIFO: average 4 samples, rollover on
     write_reg(Heart_dev, 0x09, 0x03);          // mode: SpO2 (red + IR)
-    write_reg(Heart_dev, 0x0A, 0x27);          // 4096nA range, 100 Hz, 411us pulse
+    write_reg(Heart_dev, 0x0A, 0x2F);          // 4096nA range, 400 sps, 411us pulse (100 Hz after averaging)
     write_reg(Heart_dev, 0x0C, 0x24);          // red LED current (~7 mA)
     write_reg(Heart_dev, 0x0D, 0x24);          // IR LED current (~7 mA)
 }

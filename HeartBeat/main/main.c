@@ -1,9 +1,12 @@
 #include <stdio.h>
+#include <string.h>
 #include "driver/i2c_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_err.h"
 #include "Drivers.h"
+#include "ppg_hr_spo2.h"
+#include "ei_anomaly.h"
 #include "Helpers.c"
 #include "Functions.c"
 
@@ -76,15 +79,82 @@ uint8_t OledBase[1024] = {
 uint8_t Buf[1024];
 static void sensor_task(void *arg)
 {
+    static ppg_state_t ppg;                       // BPM/SpO2 state
+    ppg_init(&ppg);
+
+    // Window of the last 10 seconds, one row per second: bpm, spo2, temp
+    const int WINDOW_ROWS = ei_anomaly_window_rows();
+    static float window[ANOMALY_MAX_ROWS * 3];
+    if (WINDOW_ROWS > ANOMALY_MAX_ROWS) {
+        printf("Model needs %d rows but the buffer only holds %d\n", WINDOW_ROWS, ANOMALY_MAX_ROWS);
+        vTaskDelete(NULL);
+    }
+    int rows_filled = 0;
+
     uint32_t red = 0, ir = 0;
+    float temp = 0.0f;
+    bool have_temp = false;
+    float last_bpm = 0.0f;                        // reused when a window has too few beats
+    bool have_bpm = false;
+    uint8_t abnormal_history[ALERT_WINDOW] = {0};
+    int history_pos = 0;
+
+    TickType_t last_wake = xTaskGetTickCount();
     while (1) {
+        // vTaskDelayUntil keeps the period at 100 ms (vTaskDelay would add the sensor read time)
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SAMPLE_PERIOD_MS));
+
         while (Heart_read_sample(&red, &ir)) { }   // drain FIFO, keep latest
-        float temp = Temp_read();
-        uint32_t SmoothRed = MovingAverage(red);
+
+        float t = Temp_read();
+        if (t > -900.0f) {                         // -999 means the read failed, keep the last value
+            temp = t;
+            have_temp = true;
+        }
+        if (!have_temp) continue;
         float SmoothTemp = EMAFilter(temp);
-        printf("Temp: %.2f C | RED: %lu | IR: %lu | RedS: %lu | TempS: %.2f\n",
-               temp, (unsigned long)red, (unsigned long)ir,(unsigned long)SmoothRed,SmoothTemp);
-        vTaskDelay(pdMS_TO_TICKS(100));
+
+        ppg_result_t r;
+        if (!ppg_push(&ppg, ir, red, &r)) continue;   // true once per second
+
+        if (r.bpm_valid) {
+            last_bpm = r.bpm;
+            have_bpm = true;
+        }
+        if (!have_bpm) continue;                   // no heartbeat found yet
+
+        // add this second's row to the window, dropping the oldest when full
+        if (rows_filled == WINDOW_ROWS) {
+            memmove(&window[0], &window[3], (WINDOW_ROWS - 1) * 3 * sizeof(float));
+            rows_filled--;
+        }
+        window[rows_filled * 3 + 0] = last_bpm;
+        window[rows_filled * 3 + 1] = r.spo2;
+        window[rows_filled * 3 + 2] = SmoothTemp;
+        rows_filled++;
+
+        if (rows_filled < WINDOW_ROWS) {
+            printf("BPM: %.1f | SpO2: %.1f | Temp: %.2f C | filling window %d/%d\n",
+                   last_bpm, r.spo2, SmoothTemp, rows_filled, WINDOW_ROWS);
+            continue;
+        }
+
+        float score;
+        if (!ei_anomaly_score(window, &score)) {
+            printf("Model error\n");
+            continue;
+        }
+        abnormal_history[history_pos] = (score > ANOMALY_THRESHOLD);
+        history_pos = (history_pos + 1) % ALERT_WINDOW;
+        int abnormal_count = 0;
+        for (int i = 0; i < ALERT_WINDOW; i++) abnormal_count += abnormal_history[i];
+        bool alert = (abnormal_count >= ALERT_NEEDED);
+
+        printf("BPM: %.1f | SpO2: %.1f | Temp: %.2f C | RED: %lu | IR: %lu | Score: %.3f %s%s\n",
+               last_bpm, r.spo2, SmoothTemp, (unsigned long)red, (unsigned long)ir, score,
+               (score > ANOMALY_THRESHOLD) ? "ABNORMAL" : "normal",
+               alert ? "  <<< ALERT >>>" : "");
+        // TODO: use 'alert' to drive the OLED / LED / buzzer
     }
 }
 
@@ -98,5 +168,5 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(3000));
     horizontal_to_pages(OledBase,Buf);
     OLED_WriteBuffer(Oled_dev,Buf);
-    xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 5, NULL);
+    xTaskCreate(sensor_task, "sensor_task", 16384, NULL, 5, NULL);   // larger stack for the model
 }
