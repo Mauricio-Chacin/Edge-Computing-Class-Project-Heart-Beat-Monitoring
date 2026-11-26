@@ -17,7 +17,7 @@ extern "C" bool ei_anomaly_score(const float *window, float *score)
     if (ei::numpy::signal_from_buffer(window, EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE, &signal) != 0) {
         return false;
     }
-    ei_impulse_result_t result = { 0 };
+    ei_impulse_result_t result = {};
     if (run_classifier(&signal, &result, false) != EI_IMPULSE_OK) {
         return false;
     }

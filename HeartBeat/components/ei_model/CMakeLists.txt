@@ -29,6 +29,7 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -std=gnu++17
     -Wno-unused-variable
+    -Wno-missing-field-initializers
     -Wno-error=format=
     -Wno-format-security
     -Wno-deprecated-declarations
