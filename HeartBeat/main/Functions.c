@@ -2,6 +2,7 @@
 #include "Drivers.h"
 #include "esp_err.h"
 #include <string.h>
+#include "freertos/FreeRTOS.h"
 
 // OLED bitmap 128x64
 
@@ -122,10 +123,10 @@ void horizontal_to_pages(uint8_t *src, uint8_t *dst)
     }
 }
 
-void PrintNum(int pos, int digit,uint8_t *Bitmap){
+void PrintNum(int pos, uint8_t digit, uint8_t *Bitmap) {
     int Start = 0;
     uint8_t TempBuf[1024];
-    uint8_t font5x8[10][8] = {
+    uint8_t font5x8[11][8] = {
     {0x38,0x44,0x44,0x4C,0x54,0x64,0x44,0x38}, //0
     {0x10,0x30,0x50,0x10,0x10,0x10,0x10,0x7C}, // 1
     {0x78,0x0C,0x0C,0x0C,0x38,0x60,0x60,0x7C}, //2
@@ -135,7 +136,8 @@ void PrintNum(int pos, int digit,uint8_t *Bitmap){
     {0x7C,0x40,0x40,0x40,0x7C,0x44,0x44,0x7C}, //6
     {0x7C,0x7C,0x0C,0x0C,0x0C,0x0C,0x0C,0x0C}, //7
     {0x38,0x44,0x44,0x44,0x7C,0x44,0x44,0x38}, // 8
-    {0x38,0x44,0x44,0x44,0x7C,0x04,0x44,0x78} // 9
+    {0x38,0x44,0x44,0x44,0x7C,0x04,0x44,0x78}, // 9
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}//Clear
     };
     switch (pos)
     {
@@ -177,12 +179,23 @@ void PrintNum(int pos, int digit,uint8_t *Bitmap){
     OLED_WriteBuffer(Oled_dev,TempBuf);
 
 }
-void PrintReading(int Start,int *Reading,uint8_t *Bitmap){
+void PrintReading(int Start, const uint8_t *Reading, uint8_t len, uint8_t *Bitmap){
     int Count = 0;
-    for(int i = Start; i < (Start + 3); i++){
+    for(int i = Start; i < (Start + len); i++){
         PrintNum(i,Reading[Count],Bitmap);
         Count++;
     }
+}
+void OledShowReadings(const display_msg_t *m, uint8_t *Bitmap){
+    PrintReading(1,m->bpm_digits,m->bpm_len,Bitmap);
+    PrintReading(4,m->spo2_digits,m->spo2_len,Bitmap);
+    PrintReading(7,m->temp_digits,3,Bitmap);
+}
+void OledClearReadings(uint8_t *Bitmap){
+    const uint8_t Clear[3] = {10,10,10};
+    PrintReading(1,Clear,3,Bitmap);
+    PrintReading(4,Clear,3,Bitmap);
+    PrintReading(7,Clear,3,Bitmap);
 }
 void OLED_Clear()
 {
@@ -196,4 +209,24 @@ void OLED_Clear()
 
     i2c_master_transmit(Oled_dev, buffer,
                         length + 1, -1);
+}
+
+int split_digits(int v, uint8_t *out)
+{
+    if (v < 0)   v = 0;
+    if (v > 999) v = 999;
+    if (v >= 100) { out[0] = v / 100; out[1] = (v / 10) % 10; out[2] = v % 10; return 3; }
+    if (v >= 10)  { out[0] = v / 10;  out[1] = v % 10;                         return 2; }
+    out[0] = v;
+    return 1;
+}
+
+
+void display_send(QueueHandle_t display,const display_msg_t *m)
+{
+    if (xQueueSend(display, m, 0) != pdTRUE) {
+        display_msg_t discard;
+        xQueueReceive(display, &discard, 0);
+        xQueueSend(display, m, 0);
+    }
 }

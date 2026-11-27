@@ -1,9 +1,12 @@
 #include <stdio.h>
+#include <string.h>
 #include "driver/i2c_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_err.h"
 #include "Drivers.h"
+#include "ppg_hr_spo2.h"
+#include "ei_anomaly.h"
 #include "Helpers.c"
 #include "Functions.c"
 
@@ -73,24 +76,140 @@ uint8_t OledBase[1024] = {
 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 };
-//Oled Screen bitmaps
+//Oled Screen Buffers
 
 uint8_t Buf[1024];
 uint8_t FontBuf[5];
 int Numbers[3] = {1,2,3};
 int Numbers2[3] = {4,5,6};
 int Numbers3[3] = {7,8,9};
+//Queue Handler
+static QueueHandle_t display_queue;
+
 static void sensor_task(void *arg)
 {
+    static ppg_state_t ppg;
+    ppg_init(&ppg);
+
+    const int WINDOW_ROWS = ei_anomaly_window_rows();
+    static float window[ANOMALY_MAX_ROWS * 3];
+    if (WINDOW_ROWS > ANOMALY_MAX_ROWS) {
+        printf("Model needs %d rows but the buffer only holds %d\n", WINDOW_ROWS, ANOMALY_MAX_ROWS);
+        vTaskDelete(NULL);
+    }
+    int rows_filled = 0;
+
     uint32_t red = 0, ir = 0;
+    float temp = 0.0f;
+    bool have_temp = false;
+    float last_bpm = 0.0f;
+    bool have_bpm = false;
+    uint8_t abnormal_history[ALERT_WINDOW] = {0};
+    int history_pos = 0;
+
+    int  low_count = FINGER_LOST_SAMPLES;   // start as "no finger"
+    bool finger_was_on = false;
+
+    TickType_t last_wake = xTaskGetTickCount();
     while (1) {
-        while (Heart_read_sample(&red, &ir)) { }   // drain FIFO, keep latest
-        float temp = Temp_read();
-        uint32_t SmoothRed = MovingAverage(red);
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SAMPLE_PERIOD_MS));
+
+        while (Heart_read_sample(&red, &ir)) { }
+
+        // ---- (1) finger detection with a small debounce ----
+        if (ir >= FINGER_IR_MIN && red >= FINGER_RED_MIN) low_count = 0;
+        else if (low_count < FINGER_LOST_SAMPLES)         low_count++;
+        bool finger = (low_count < FINGER_LOST_SAMPLES);
+
+        if (!finger) {
+            if (finger_was_on) {                // finger just removed: throw away stale state
+                finger_was_on = false;
+                ppg_init(&ppg);
+                rows_filled = 0;
+                have_bpm = false;
+                history_pos = 0;
+                memset(abnormal_history, 0, sizeof(abnormal_history));
+            }
+            display_msg_t m = { .finger = false };
+            display_send(display_queue,&m);
+            continue;                           // no model run, so no alert
+        }
+        finger_was_on = true;
+
+        float t = Temp_read();
+        if (t > -900.0f) {
+            temp = t;
+            have_temp = true;
+        }
+        if (!have_temp) continue;
         float SmoothTemp = EMAFilter(temp);
-        printf("Temp: %.2f C | RED: %lu | IR: %lu | RedS: %lu | TempS: %.2f\n",
-               temp, (unsigned long)red, (unsigned long)ir,(unsigned long)SmoothRed,SmoothTemp);
-        vTaskDelay(pdMS_TO_TICKS(100));
+
+        ppg_result_t r;
+        if (!ppg_push(&ppg, ir, red, &r)) continue;   // true once per second
+
+        if (r.bpm_valid) {
+            last_bpm = r.bpm;
+            have_bpm = true;
+        }
+        if (!have_bpm) continue;
+
+        if (rows_filled == WINDOW_ROWS) {
+            memmove(&window[0], &window[3], (WINDOW_ROWS - 1) * 3 * sizeof(float));
+            rows_filled--;
+        }
+        window[rows_filled * 3 + 0] = last_bpm;
+        window[rows_filled * 3 + 1] = r.spo2;
+        window[rows_filled * 3 + 2] = SmoothTemp;
+        rows_filled++;
+
+        bool alert = false;
+        if (rows_filled < WINDOW_ROWS) {
+            printf("BPM: %.1f | SpO2: %.1f | Temp: %.2f C | filling window %d/%d\n",
+                   last_bpm, r.spo2, SmoothTemp, rows_filled, WINDOW_ROWS);
+        } else {
+            float score;
+            if (!ei_anomaly_score(window, &score)) {
+                printf("Model error\n");
+                continue;
+            }
+            abnormal_history[history_pos] = (score > ANOMALY_THRESHOLD);
+            history_pos = (history_pos + 1) % ALERT_WINDOW;
+            int abnormal_count = 0;
+            for (int i = 0; i < ALERT_WINDOW; i++) abnormal_count += abnormal_history[i];
+            alert = (abnormal_count >= ALERT_NEEDED);
+
+            printf("BPM: %.1f | SpO2: %.1f | Temp: %.2f C | RED: %lu | IR: %lu | Score: %.3f %s%s\n",
+                   last_bpm, r.spo2, SmoothTemp, (unsigned long)red, (unsigned long)ir, score,
+                   (score > ANOMALY_THRESHOLD) ? "ABNORMAL" : "normal",
+                   alert ? "  <<< ALERT >>>" : "");
+        }
+
+        // ---- (2) digit arrays + (3) send to the OLED queue ----
+        display_msg_t m = { .finger = true, .alert = alert };
+        m.bpm_len  = split_digits((int)(last_bpm + 0.5f), m.bpm_digits);
+        m.spo2_len = split_digits((int)(r.spo2 + 0.5f),   m.spo2_digits);
+        split_digits((int)(SmoothTemp * 10.0f + 0.5f), m.temp_digits);   // 36.5 -> 365 -> {3,6,5}
+        display_send(display_queue,&m);
+    }
+}
+
+static void display_task(void *arg)
+{
+    TickType_t last_wake = xTaskGetTickCount();
+
+    for (;;) {
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(1000));
+
+        display_msg_t m, latest;
+        bool got_any = false;
+        while (xQueueReceive(display_queue, &m, 0) == pdTRUE) {   // drain, keep newest
+            latest = m;
+            got_any = true;
+        }
+        if (!got_any) continue;
+
+        if (latest.finger) OledShowReadings(&latest,OledBase);
+        else               OledClearReadings(OledBase);
     }
 }
 
@@ -105,11 +224,8 @@ void app_main(void)
     horizontal_to_pages(OledBase,Buf);
     OLED_WriteBuffer(Oled_dev,Buf);
     vTaskDelay(pdMS_TO_TICKS(3000));
-
-    PrintReading(1,Numbers,OledBase);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    PrintReading(4,Numbers2,OledBase);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    PrintReading(7,Numbers3,OledBase);
+    display_queue = xQueueCreate(16, sizeof(display_msg_t));
+    configASSERT(display_queue);
     xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 5, NULL);
+    xTaskCreate(display_task, "display", 4096, NULL, 4, NULL);
 }
