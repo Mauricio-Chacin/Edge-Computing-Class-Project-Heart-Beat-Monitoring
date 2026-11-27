@@ -45,4 +45,7 @@ float EMAFilter(float sample);
 //Oled
 void OLED_WriteBuffer(i2c_master_dev_handle_t dev, const uint8_t *bitmap);
 void horizontal_to_pages(uint8_t *src, uint8_t *dst);
+void set_cursor(uint8_t x, uint8_t page);
+void PrintNum(int pos, int digit,uint8_t *Bitmap);
+void PrintReading(int Start,int *Reading,uint8_t *Bitmap);
 #endif
